@@ -1,0 +1,21 @@
+{
+  "project": {
+    "name": "sample-react-app",
+    "build_command": "",
+    "output_dir": ""
+  },
+  "aws": {
+    "region": "us-east-1",
+    "profile": ""
+  },
+  "environment": "production",
+  "environments": {
+    "development": {},
+    "staging": {},
+    "production": {}
+  },
+  "build": {
+    "docker_image": "node:20-alpine",
+    "use_docker": true
+  }
+}

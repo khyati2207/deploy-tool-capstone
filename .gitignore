@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+node_modules/
+.env
+.env.*
+!.env.example
+.deploy-tool/
