@@ -1,12 +1,16 @@
-name: CI
+name: CI/CD
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Get repository files
@@ -37,3 +41,87 @@ jobs:
       - name: Build React app
         working-directory: sample-react-app
         run: npm run build
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Get repository files
+        uses: actions/checkout@v4
+
+      - name: Connect to AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::113460354693:role/GitHubActionsCapstoneDeploy
+          aws-region: us-east-1
+
+      - name: Sign in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          IMAGE_URI: ${{ steps.ecr.outputs.registry }}/capstone-sample-app:${{ github.sha }}-${{ github.run_attempt }}
+        run: |
+          cat > sample-react-app/Dockerfile <<'DOCKERFILE'
+          FROM node:22-alpine AS build
+          WORKDIR /app
+          COPY package*.json ./
+          RUN npm ci
+          COPY . .
+          RUN npm run build
+          FROM nginx:alpine
+          COPY --from=build /app/dist /usr/share/nginx/html
+          EXPOSE 80
+          DOCKERFILE
+
+          docker build -t "$IMAGE_URI" sample-react-app
+          docker push "$IMAGE_URI"
+
+      - name: Update ECS service
+        env:
+          IMAGE_URI: ${{ steps.ecr.outputs.registry }}/capstone-sample-app:${{ github.sha }}-${{ github.run_attempt }}
+        run: |
+          cat > task-definition.json <<JSON
+          {
+            "family": "capstone-sample-app",
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "256",
+            "memory": "512",
+            "executionRoleArn": "arn:aws:iam::113460354693:role/capstone-sample-app-ecs-execution",
+            "containerDefinitions": [
+              {
+                "name": "capstone-sample-app",
+                "image": "${IMAGE_URI}",
+                "essential": true,
+                "portMappings": [
+                  {
+                    "containerPort": 80,
+                    "hostPort": 80,
+                    "protocol": "tcp"
+                  }
+                ]
+              }
+            ]
+          }
+          JSON
+
+          TASK_DEFINITION_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://task-definition.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster capstone-sample-app \
+            --service capstone-sample-app \
+            --task-definition "$TASK_DEFINITION_ARN"
+
+          aws ecs wait services-stable \
+            --cluster capstone-sample-app \
+            --services capstone-sample-app
